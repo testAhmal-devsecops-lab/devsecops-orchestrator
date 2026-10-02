@@ -1,89 +1,25 @@
-name: Central D-Track Pipeline
-
-on:
-  workflow_call:
-    secrets:
-      DTRACK_API_KEY:
-        required: true
-
-jobs:
-  sbom-scan:
-    name: Generate SBOM & Upload to Dependency-Track
-    runs-on: [self-hosted]
-
-    steps:
-      - name: Checkout du dépôt appelant
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Installer cdxgen
-        shell: powershell
-        run: |
-          npm install -g @cyclonedx/cdxgen
-
-      - name: Générer le SBOM
+- name: Générer le SBOM
         shell: powershell
         run: |
           Write-Host "Génération du SBOM..."
-          cdxgen -o bom.json
-
-          if (-not (Test-Path "./bom.json")) {
-            Write-Error "Le fichier bom.json n'a pas été généré."
-            exit 1
-          }
-
-          Write-Host "SBOM généré avec succès."
-
-      - name: Vérifier la clé Dependency-Track
-        shell: powershell
-        env:
-          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:DTRACK_API_KEY)) {
-            Write-Error "CRITICAL: DTRACK_API_KEY est vide ou absente."
-            exit 1
-          }
-          Write-Host "DTRACK_API_KEY détectée."
-
-      - name: Déterminer les informations du projet
-        id: project
-        shell: powershell
-        run: |
-          $projectName = $env:GITHUB_REPOSITORY.Split("/")[1]
-          $projectVersion = "1.0.0"
-
+          
+          # Si c'est un repo JS/TS, on peut spécifier -t js pour éviter que cdxgen tente Gradle/Android
           if (Test-Path "./package.json") {
-            try {
-              $pkg = Get-Content -Raw -Path "./package.json" | ConvertFrom-Json
-              if (-not [string]::IsNullOrWhiteSpace($pkg.version)) {
-                $projectVersion = $pkg.version
-              }
-            }
-            catch {
-              Write-Warning "Impossible de lire package.json."
-            }
-          }
-          elseif (Test-Path "./composer.json") {
-            try {
-              $composer = Get-Content -Raw -Path "./composer.json" | ConvertFrom-Json
-              if (-not [string]::IsNullOrWhiteSpace($composer.version)) {
-                $projectVersion = $composer.version
-              }
-            }
-            catch {
-              Write-Warning "Impossible de lire composer.json."
-            }
+            Write-Host "Projet JavaScript/TypeScript détecté. Cible: js"
+            cdxgen -t js -o bom.json
+          } elseif (Test-Path "./composer.json") {
+            Write-Host "Projet PHP détecté. Cible: php"
+            cdxgen -t php -o bom.json
+          } else {
+            cdxgen -o bom.json
           }
 
-          Write-Host "Projet  : $projectName"
-          Write-Host "Version : $projectVersion"
+          if (-not (Test-Path "./bom.json") -or (Get-Item "./bom.json").Length -eq 0) {
+            Write-Error "Le fichier bom.json est absent ou vide."
+            exit 1
+          }
 
-          "project_name=$projectName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "project_version=$projectVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "SBOM généré avec succès. Taille : $((Get-Item './bom.json').Length) octets."
 
       - name: Envoyer le SBOM à Dependency-Track
         shell: powershell
@@ -93,15 +29,6 @@ jobs:
           PROJECT_NAME: ${{ steps.project.outputs.project_name }}
           PROJECT_VERSION: ${{ steps.project.outputs.project_version }}
         run: |
-          if (-not (Test-Path "./bom.json")) {
-            Write-Error "CRITICAL: bom.json est introuvable."
-            exit 1
-          }
-
-          Write-Host "Dependency-Track : $env:DTRACK_URL"
-          Write-Host "Projet : $env:PROJECT_NAME"
-          Write-Host "Version : $env:PROJECT_VERSION"
-
           $bomBytes = [System.IO.File]::ReadAllBytes("./bom.json")
           $bomBase64 = [System.Convert]::ToBase64String($bomBytes)
 
@@ -125,16 +52,18 @@ jobs:
               -Body $body `
               -ErrorAction Stop
 
-            if (-not $response.token) {
-              Write-Error "Dependency-Track n'a pas retourné de token."
-              exit 1
-            }
-
             Write-Host "SBOM envoyé avec succès à Dependency-Track."
             Write-Host "Token : $($response.token)"
           }
           catch {
             Write-Error "Échec de l'envoi du SBOM à Dependency-Track."
-            Write-Error $_.Exception.Message
+            if ($_.Exception.Response) {
+              $stream =$_.Exception.Response.GetResponseStream()
+              $reader = New-Object System.IO.StreamReader($stream)
+              $bodyResponse =$reader.ReadToEnd()
+              Write-Error "Détail de l'erreur API : $bodyResponse"
+            } else {
+              Write-Error $_.Exception.Message
+            }
             exit 1
           }
