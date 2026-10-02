@@ -1,8 +1,9 @@
 name: Central D-Track Pipeline
-
 on:
   workflow_call:
-
+    secrets:
+      DTRACK_API_KEY:
+        required: true
 jobs:
   sbom-scan:
     runs-on: [self-hosted, Windows]
