@@ -2,7 +2,6 @@ name: Central D-Track Pipeline
 
 on:
   workflow_call:
-    # Ce workflow peut être appelé par n'importe quel autre repo
 
 jobs:
   sbom-scan:
@@ -18,18 +17,17 @@ jobs:
           node-version: '20'
 
       - name: Installer l'outil universel CycloneDX
-        shell: pwsh
+        shell: powershell
         run: |
           npm install -g @cyclonedx/cdxgen
 
       - name: Générer le SBOM
-        shell: pwsh
+        shell: powershell
         run: |
-          # cdxgen détecte automatiquement s'il y a du JS (package.json) ou du PHP (composer.json)
           cdxgen -o bom.json
 
       - name: Pousser vers Dependency-Track
-        shell: pwsh
+        shell: powershell
         env:
           DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
         run: |
