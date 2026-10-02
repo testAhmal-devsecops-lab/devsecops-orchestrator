@@ -65,12 +65,12 @@ jobs:
 
           if (Test-Path "./package.json") {
             Write-Host "Détection JS/TS : forçage du type 'js' pour ignorer Gradle/Android"
-            cdxgen -t js -o bom.json
+            cdxgen --spec-version 1.5 -t js -o bom.json
           } elseif (Test-Path "./composer.json") {
             Write-Host "Détection PHP : forçage du type 'php'"
-            cdxgen -t php -o bom.json
+            cdxgen --spec-version 1.5 -t php -o bom.json
           } else {
-            cdxgen -o bom.json
+            cdxgen --spec-version 1.5 -o bom.json
           }
 
           if (-not (Test-Path "./bom.json")) {
