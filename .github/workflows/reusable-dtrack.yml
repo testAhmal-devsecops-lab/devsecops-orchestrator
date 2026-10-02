@@ -2,13 +2,17 @@ name: Central D-Track Pipeline
 
 on:
   workflow_call:
+    secrets:
+      DTRACK_API_KEY:
+        required: true
 
 jobs:
   sbom-scan:
+    name: Generate SBOM & Upload to Dependency-Track
     runs-on: [self-hosted, Windows]
 
     steps:
-      - name: Checkout du code du dépôt appelant
+      - name: Checkout du dépôt appelant
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -16,7 +20,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Installer l'outil universel CycloneDX
+      - name: Installer cdxgen
         shell: powershell
         run: |
           npm install -g @cyclonedx/cdxgen
@@ -24,49 +28,123 @@ jobs:
       - name: Générer le SBOM
         shell: powershell
         run: |
-          cdxgen -o bom.json
+          Write-Host "Génération du SBOM..."
 
-      - name: Pousser vers Dependency-Track
+          cdxgen `
+            -o bom.json
+
+          if (-not (Test-Path "./bom.json")) {
+            Write-Error "Le fichier bom.json n'a pas été généré."
+            exit 1
+          }
+
+          Write-Host "SBOM généré avec succès."
+
+      - name: Vérifier la clé Dependency-Track
         shell: powershell
         env:
           DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
         run: |
-          if (-not $env:DTRACK_API_KEY) {
-              Write-Error "CRITICAL: La variable DTRACK_API_KEY est toujours vide."
-              exit 1
+          if ([string]::IsNullOrWhiteSpace($env:DTRACK_API_KEY)) {
+            Write-Error "CRITICAL: DTRACK_API_KEY est vide ou absente."
+            exit 1
           }
 
-          $projectName = "$env:GITHUB_REPOSITORY".Split("/")[1]
+          Write-Host "DTRACK_API_KEY détectée."
 
+      - name: Déterminer les informations du projet
+        id: project
+        shell: powershell
+        run: |
+          $projectName = $env:GITHUB_REPOSITORY.Split("/")[1]
           $projectVersion = "1.0.0"
+
           if (Test-Path "./package.json") {
-              try {
-                  $pkg = Get-Content -Raw -Path "./package.json" | ConvertFrom-Json
-                  if ($pkg.version) { $projectVersion = $pkg.version }
-              } catch { Write-Host "Erreur lecture package.json" }
-          } elseif (Test-Path "./composer.json") {
-              try {
-                  $composer = Get-Content -Raw -Path "./composer.json" | ConvertFrom-Json
-                  if ($composer.version) { $projectVersion = $composer.version }
-              } catch { Write-Host "Erreur lecture composer.json" }
+            try {
+              $pkg = Get-Content -Raw -Path "./package.json" | ConvertFrom-Json
+
+              if (-not [string]::IsNullOrWhiteSpace($pkg.version)) {
+                $projectVersion = $pkg.version
+              }
+            }
+            catch {
+              Write-Warning "Impossible de lire package.json."
+            }
+          }
+          elseif (Test-Path "./composer.json") {
+            try {
+              $composer = Get-Content -Raw -Path "./composer.json" | ConvertFrom-Json
+
+              if (-not [string]::IsNullOrWhiteSpace($composer.version)) {
+                $projectVersion = $composer.version
+              }
+            }
+            catch {
+              Write-Warning "Impossible de lire composer.json."
+            }
           }
 
-          Write-Host "Projet analysé : $projectName | Version : $projectVersion"
+          Write-Host "Projet  : $projectName"
+          Write-Host "Version : $projectVersion"
+
+          "project_name=$projectName" >> $env:GITHUB_OUTPUT
+          "project_version=$projectVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Envoyer le SBOM à Dependency-Track
+        shell: powershell
+        env:
+          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
+          DTRACK_URL: ${{ vars.DTRACK_URL }}
+          PROJECT_NAME: ${{ steps.project.outputs.project_name }}
+          PROJECT_VERSION: ${{ steps.project.outputs.project_version }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DTRACK_URL)) {
+            Write-Error "CRITICAL: DTRACK_URL n'est pas défini."
+            exit 1
+          }
+
+          if (-not (Test-Path "./bom.json")) {
+            Write-Error "CRITICAL: bom.json est introuvable."
+            exit 1
+          }
+
+          Write-Host "Dependency-Track : $env:DTRACK_URL"
+          Write-Host "Projet : $env:PROJECT_NAME"
+          Write-Host "Version : $env:PROJECT_VERSION"
 
           $bomBytes = [System.IO.File]::ReadAllBytes("./bom.json")
           $bomBase64 = [System.Convert]::ToBase64String($bomBytes)
 
           $body = @{
-              projectName    = $projectName
-              projectVersion = $projectVersion
-              autoCreate     = $true
-              bom            = $bomBase64
+            projectName    = $env:PROJECT_NAME
+            projectVersion = $env:PROJECT_VERSION
+            autoCreate     = $true
+            bom            = $bomBase64
           } | ConvertTo-Json -Compress
 
           $headers = @{
-              "X-Api-Key"    = $env:DTRACK_API_KEY
-              "Content-Type" = "application/json"
+            "X-Api-Key"    = $env:DTRACK_API_KEY
+            "Content-Type" = "application/json"
           }
 
-          $res = Invoke-RestMethod -Uri "http://localhost:8081/api/v1/bom" -Method Put -Headers $headers -Body $body
-          Write-Host "Succès : SBOM ingéré par Dependency-Track. Token: $($res.token)"
+          try {
+            $response = Invoke-RestMethod `
+              -Uri "$env:DTRACK_URL/api/v1/bom" `
+              -Method Put `
+              -Headers $headers `
+              -Body $body `
+              -ErrorAction Stop
+
+            if (-not $response.token) {
+              Write-Error "Dependency-Track n'a pas retourné de token."
+              exit 1
+            }
+
+            Write-Host "SBOM envoyé avec succès à Dependency-Track."
+            Write-Host "Token : $($response.token)"
+          }
+          catch {
+            Write-Error "Échec de l'envoi du SBOM à Dependency-Track."
+            Write-Error $_.Exception.Message
+            exit 1
+          }
