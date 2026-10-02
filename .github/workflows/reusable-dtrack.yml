@@ -2,9 +2,6 @@ name: Central D-Track Pipeline
 
 on:
   workflow_call:
-    secrets:
-      DTRACK_API_KEY:
-        required: true
 
 jobs:
   sbom-scan:
@@ -34,9 +31,8 @@ jobs:
         env:
           DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
         run: |
-          # Vérification anti-régression : interruption si le secret est vide
           if (-not $env:DTRACK_API_KEY) {
-              Write-Error "CRITICAL: La variable DTRACK_API_KEY est vide. Le secret n'a pas été transmis."
+              Write-Error "CRITICAL: La variable DTRACK_API_KEY est toujours vide."
               exit 1
           }
 
