@@ -9,7 +9,7 @@ on:
 jobs:
   sbom-scan:
     name: Generate SBOM & Upload to Dependency-Track
-    runs-on: [self-hosted, Windows]
+    runs-on: [self-hosted, windows, x64]
 
     steps:
       - name: Checkout du dépôt appelant
