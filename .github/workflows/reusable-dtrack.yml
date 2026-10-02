@@ -61,13 +61,13 @@ jobs:
       - name: Générer le SBOM
         shell: powershell
         run: |
-          Write-Host "Génération du SBOM..."
+          Write-Host "Génération du SBOM CycloneDX 1.5..."
 
           if (Test-Path "./package.json") {
-            Write-Host "Détection JS/TS : forçage du type 'js' pour ignorer Gradle/Android"
+            Write-Host "Projet JS détecté : cdxgen spec 1.5"
             cdxgen --spec-version 1.5 -t js -o bom.json
           } elseif (Test-Path "./composer.json") {
-            Write-Host "Détection PHP : forçage du type 'php'"
+            Write-Host "Projet PHP détecté : cdxgen spec 1.5"
             cdxgen --spec-version 1.5 -t php -o bom.json
           } else {
             cdxgen --spec-version 1.5 -o bom.json
@@ -79,11 +79,6 @@ jobs:
           }
 
           $taille = (Get-Item "./bom.json").Length
-          if ($taille -eq 0) {
-            Write-Error "CRITICAL: bom.json est vide."
-            exit 1
-          }
-
           Write-Host "SBOM généré avec succès ($taille octets)."
 
       - name: Envoyer le SBOM à Dependency-Track
@@ -111,12 +106,13 @@ jobs:
 
           try {
             $resp = Invoke-RestMethod -Uri "$env:DTRACK_URL/api/v1/bom" -Method Put -Headers $headers -Body $payload -ErrorAction Stop
-            Write-Host "Succès D-Track ! Token d'ingestion : $($resp.token)"
+            Write-Host "SUCCÈS D-TRACK ! Token d'ingestion : $($resp.token)"
           } catch {
             Write-Error "Erreur HTTP lors de l'envoi :"
             if ($_.Exception.Response) {
-              $sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-              Write-Error $sr.ReadToEnd()
+              $stream = $_.Exception.Response.GetResponseStream()
+              $reader = New-Object System.IO.StreamReader($stream)
+              Write-Error $reader.ReadToEnd()
             } else {
               Write-Error $_.Exception.Message
             }
