@@ -9,7 +9,7 @@ on:
 jobs:
   sbom-scan:
     name: Generate SBOM & Upload to Dependency-Track
-    runs-on: [self-hosted, windows, x64]
+    runs-on: [self-hosted]
 
     steps:
       - name: Checkout du dépôt appelant
@@ -29,9 +29,7 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Génération du SBOM..."
-
-          cdxgen `
-            -o bom.json
+          cdxgen -o bom.json
 
           if (-not (Test-Path "./bom.json")) {
             Write-Error "Le fichier bom.json n'a pas été généré."
@@ -49,7 +47,6 @@ jobs:
             Write-Error "CRITICAL: DTRACK_API_KEY est vide ou absente."
             exit 1
           }
-
           Write-Host "DTRACK_API_KEY détectée."
 
       - name: Déterminer les informations du projet
@@ -62,7 +59,6 @@ jobs:
           if (Test-Path "./package.json") {
             try {
               $pkg = Get-Content -Raw -Path "./package.json" | ConvertFrom-Json
-
               if (-not [string]::IsNullOrWhiteSpace($pkg.version)) {
                 $projectVersion = $pkg.version
               }
@@ -74,7 +70,6 @@ jobs:
           elseif (Test-Path "./composer.json") {
             try {
               $composer = Get-Content -Raw -Path "./composer.json" | ConvertFrom-Json
-
               if (-not [string]::IsNullOrWhiteSpace($composer.version)) {
                 $projectVersion = $composer.version
               }
@@ -87,22 +82,17 @@ jobs:
           Write-Host "Projet  : $projectName"
           Write-Host "Version : $projectVersion"
 
-          "project_name=$projectName" >> $env:GITHUB_OUTPUT
-          "project_version=$projectVersion" >> $env:GITHUB_OUTPUT
+          "project_name=$projectName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "project_version=$projectVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Envoyer le SBOM à Dependency-Track
         shell: powershell
         env:
           DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
-          DTRACK_URL: ${{ vars.DTRACK_URL }}
+          DTRACK_URL: ${{ vars.DTRACK_URL || 'http://localhost:8081' }}
           PROJECT_NAME: ${{ steps.project.outputs.project_name }}
           PROJECT_VERSION: ${{ steps.project.outputs.project_version }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:DTRACK_URL)) {
-            Write-Error "CRITICAL: DTRACK_URL n'est pas défini."
-            exit 1
-          }
-
           if (-not (Test-Path "./bom.json")) {
             Write-Error "CRITICAL: bom.json est introuvable."
             exit 1
