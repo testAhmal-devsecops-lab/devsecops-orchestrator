@@ -1,0 +1,72 @@
+name: Central D-Track Pipeline
+
+on:
+  workflow_call:
+    # Ce workflow peut être appelé par n'importe quel autre repo
+
+jobs:
+  sbom-scan:
+    runs-on: [self-hosted, Windows]
+
+    steps:
+      - name: Checkout du code du dépôt appelant
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Installer l'outil universel CycloneDX
+        shell: pwsh
+        run: |
+          npm install -g @cyclonedx/cdxgen
+
+      - name: Générer le SBOM
+        shell: pwsh
+        run: |
+          # cdxgen détecte automatiquement s'il y a du JS (package.json) ou du PHP (composer.json)
+          cdxgen -o bom.json
+
+      - name: Pousser vers Dependency-Track
+        shell: pwsh
+        env:
+          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
+        run: |
+          # 1. Nom du projet = nom du repo courant
+          $projectName = "$env:GITHUB_REPOSITORY".Split("/")[1]
+
+          # 2. Détection de version (package.json ou composer.json)
+          $projectVersion = "1.0.0"
+          if (Test-Path "./package.json") {
+              try {
+                  $pkg = Get-Content -Raw -Path "./package.json" | ConvertFrom-Json
+                  if ($pkg.version) { $projectVersion = $pkg.version }
+              } catch { Write-Host "Erreur lecture package.json" }
+          } elseif (Test-Path "./composer.json") {
+              try {
+                  $composer = Get-Content -Raw -Path "./composer.json" | ConvertFrom-Json
+                  if ($composer.version) { $projectVersion = $composer.version }
+              } catch { Write-Host "Erreur lecture composer.json" }
+          }
+
+          Write-Host "Projet analysé : $projectName | Version : $projectVersion"
+
+          # 3. Préparation et envoi vers Dependency-Track
+          $bomBytes = [System.IO.File]::ReadAllBytes("./bom.json")
+          $bomBase64 = [System.Convert]::ToBase64String($bomBytes)
+
+          $body = @{
+              projectName    = $projectName
+              projectVersion = $projectVersion
+              autoCreate     = $true
+              bom            = $bomBase64
+          } | ConvertTo-Json -Compress
+
+          $headers = @{
+              "X-Api-Key"    = $env:DTRACK_API_KEY
+              "Content-Type" = "application/json"
+          }
+
+          $res = Invoke-RestMethod -Uri "http://localhost:8081/api/v1/bom" -Method Put -Headers $headers -Body $body
+          Write-Host "Succès : SBOM ingéré par Dependency-Track. Token: $($res.token)"
